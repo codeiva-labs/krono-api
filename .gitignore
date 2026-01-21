@@ -1,0 +1,39 @@
+# Binaries for programs and plugins
+/bin/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, coverage
+*.test
+coverage.out
+
+# Vendor directory
+/vendor/
+
+# Go module cache
+/pkg/mod/
+$GOMODCACHE
+
+# IDE/editor directories
+.vscode/
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+
+# Environment files (keep secrets out of git)
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Temporary files
+*~
+*.swp
