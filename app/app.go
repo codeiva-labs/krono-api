@@ -4,11 +4,13 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"codeiva/krono-api/config"
+	"codeiva/krono-api/app/handler"
 )
 
 // App has router and db instances
@@ -27,12 +29,42 @@ func (a *App) Initialize(cfg *config.Config) {
 
 	a.client = client
 	a.DB = cfg.Database(client)
+	log.Printf("connected to MongoDB: %s (database=%s)", cfg.DB.MongoURI, cfg.DB.Database)
 	a.Router = mux.NewRouter()
 	a.setRouters()
 }
 
 // setRouters sets the all required routers
 func (a *App) setRouters() {
+	a.Get("/health", a.handleRequest(handler.GetHealthStatus))
+	
+	a.Router.Use(a.loggingMiddleware)
+
+	// Auth routes
+	a.Router.HandleFunc("/register", a.handleRequest(handler.Register)).Methods("POST")
+	a.Router.HandleFunc("/login", a.handleRequest(handler.Login)).Methods("POST")
+}
+
+// statusRecorder wraps http.ResponseWriter to capture the response status code.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// loggingMiddleware logs method, path, status and duration for each request.
+func (a *App) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sr := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sr, r)
+		dur := time.Since(start)
+		log.Printf("%s %s %d %s", r.Method, r.RequestURI, sr.status, dur)
+	})
 }
 
 // Get wraps the router for GET method
@@ -60,7 +92,7 @@ func (a *App) Run(host string) {
 	log.Fatal(http.ListenAndServe(host, a.Router))
 }
 
-type RequestHandlerFunction func(db *gorm.DB, w http.ResponseWriter, r *http.Request)
+type RequestHandlerFunction func(db *mongo.Database, w http.ResponseWriter, r *http.Request)
 
 func (a *App) handleRequest(handler RequestHandlerFunction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

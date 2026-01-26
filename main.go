@@ -1,16 +1,16 @@
 package main
 
 import (
-	"net/http"
-	"os"
-
-	"github.com/gin-gonic/gin"
+	"log"
+	"codeiva/krono-api/app"
+	"codeiva/krono-api/config"
 )
 
 func main() {
 	config := config.GetConfig()
 
-	app := &app.App{}
-	app.Initialize(config)
-	app.Run(":3000")
+	a := &app.App{}
+	a.Initialize(config)
+	log.Printf("starting %s on %s", "krono-api", ":3000")
+	a.Run(":3000")
 }
