@@ -1,10 +1,10 @@
 package main
 
 import (
-	"github.com/joho/godotenv"
-	"log"
 	"codeiva/krono-api/app"
 	"codeiva/krono-api/config"
+	"github.com/joho/godotenv"
+	"log"
 )
 
 func main() {

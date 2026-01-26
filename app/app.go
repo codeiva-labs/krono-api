@@ -9,8 +9,8 @@ import (
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"codeiva/krono-api/config"
 	"codeiva/krono-api/app/handler"
+	"codeiva/krono-api/config"
 )
 
 // App has router and db instances
@@ -37,12 +37,14 @@ func (a *App) Initialize(cfg *config.Config) {
 // setRouters sets the all required routers
 func (a *App) setRouters() {
 	a.Get("/health", a.handleRequest(handler.GetHealthStatus))
-	
+
 	a.Router.Use(a.loggingMiddleware)
 
 	// Auth routes
-	a.Router.HandleFunc("/register", a.handleRequest(handler.Register)).Methods("POST")
-	a.Router.HandleFunc("/login", a.handleRequest(handler.Login)).Methods("POST")
+	a.Router.HandleFunc("/auth/register", a.handleRequest(handler.Register)).Methods("POST")
+	a.Router.HandleFunc("/auth/login", a.handleRequest(handler.Login)).Methods("POST")
+	a.Router.HandleFunc("/auth/request-password-reset", a.handleRequest(handler.RequestPasswordReset)).Methods("POST")
+	a.Router.HandleFunc("/auth/reset-password", a.handleRequest(handler.ResetPassword)).Methods("POST")
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the response status code.
