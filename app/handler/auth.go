@@ -3,6 +3,8 @@ package handler
 import (
     "context"
     "encoding/json"
+    "fmt"
+    "log"
     "net/http"
     "os"
     "time"
@@ -11,10 +13,10 @@ import (
     "go.mongodb.org/mongo-driver/bson"
     "go.mongodb.org/mongo-driver/mongo"
     "go.mongodb.org/mongo-driver/mongo/options"
-
     jwt "github.com/golang-jwt/jwt/v5"
 
     "codeiva/krono-api/pkg/response"
+    "codeiva/krono-api/pkg/mail"
 )
 
 type userModel struct {
@@ -135,6 +137,26 @@ func Login(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
         response.Error(w, http.StatusInternalServerError, "failed to create token")
         return
     }
+
+    // send email for login notification (optional)
+
+    // send email for login notification (optional)
+    go func(email string) {
+        log.Printf("sending login notification email to %s", email)
+        m := mail.NewMailerFromEnv()
+        if m.Host == "" || m.Username == "" {
+            log.Printf("mailer config: host=%s, port=%d, user=%s", m.Host, m.Port, m.Username)
+            log.Printf("smtp not configured, skipping login notification email to %s", email)
+            return
+        }
+
+        subject := "New login to your account"
+        body := fmt.Sprintf("<p>Hi %s,</p><p>We detected a login to your account at %s from our service.</p>", u.Name, time.Now().Format(time.RFC1123))
+        if err := m.SendSimple(email, subject, body); err != nil {
+            log.Printf("failed to send login notification to %s: %v", email, err)
+        }
+        log.Printf("sent login notification email to %s", email)
+    }(u.Email)
 
     response.Success(w, map[string]string{"token": signed})
 }
