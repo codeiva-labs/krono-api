@@ -15,32 +15,17 @@ import (
 	jwt "github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
 	"golang.org/x/crypto/bcrypt"
 
+	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/pkg/mail"
 	"codeiva/krono-api/pkg/response"
 )
-
-type userModel struct {
-	ID        interface{} `bson:"_id,omitempty" json:"id,omitempty"`
-	Name      string      `bson:"name" json:"name"`
-	Email     string      `bson:"email" json:"email"`
-	Password  string      `bson:"password" json:"-"`
-	CreatedAt time.Time   `bson:"created_at" json:"created_at"`
-}
 
 type authRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Name     string `json:"name,omitempty"`
-}
-
-type passwordResetModel struct {
-	ID        interface{} `bson:"_id,omitempty" json:"id,omitempty"`
-	Email     string      `bson:"email" json:"email"`
-	OTP       string      `bson:"otp" json:"otp"`
-	CreatedAt time.Time   `bson:"created_at" json:"created_at"`
 }
 
 type passwordResetRequest struct {
@@ -53,18 +38,8 @@ type passwordResetConfirm struct {
 	Password string `json:"password"`
 }
 
-// ensureUsersIndex creates a unique index on email
-func ensureUsersIndex(ctx context.Context, col *mongo.Collection) error {
-	idxModel := mongo.IndexModel{
-		Keys:    bson.D{{Key: "email", Value: 1}},
-		Options: options.Index().SetUnique(true),
-	}
-	_, err := col.Indexes().CreateOne(ctx, idxModel)
-	return err
-}
-
 // Register creates a new user with hashed password
-func Register(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
+func Register(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	var req authRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, http.StatusBadRequest, "invalid request")
@@ -75,12 +50,8 @@ func Register(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	col := db.Collection("users")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-
-	// ensure unique index
-	_ = ensureUsersIndex(ctx, col)
 
 	// hash password
 	pw, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
@@ -89,14 +60,15 @@ func Register(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	u := userModel{
+	u := model.User{
 		Name:      req.Name,
 		Email:     req.Email,
 		Password:  string(pw),
 		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
 	}
 
-	_, err = col.InsertOne(ctx, u)
+	_, err = collections.Users.InsertOne(ctx, u)
 	if err != nil {
 		// if duplicate key
 		if mongo.IsDuplicateKeyError(err) {
@@ -111,7 +83,7 @@ func Register(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 }
 
 // Login validates credentials and returns a JWT token
-func Login(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
+func Login(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	var req authRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, http.StatusBadRequest, "invalid request")
@@ -122,12 +94,11 @@ func Login(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	col := db.Collection("users")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	var u userModel
-	if err := col.FindOne(ctx, bson.M{"email": req.Email}).Decode(&u); err != nil {
+	var u model.User
+	if err := collections.Users.FindOne(ctx, bson.M{"email": req.Email}).Decode(&u); err != nil {
 		if err == mongo.ErrNoDocuments {
 			response.Error(w, http.StatusUnauthorized, "invalid credentials")
 			return
@@ -183,7 +154,7 @@ func Login(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 
 // RequestPasswordReset generates an OTP and emails it to the user.
 // Previous OTPs remain valid until expiry (1 hour).
-func RequestPasswordReset(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
+func RequestPasswordReset(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	var req passwordResetRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, http.StatusBadRequest, "invalid request")
@@ -194,13 +165,11 @@ func RequestPasswordReset(db *mongo.Database, w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	colUsers := db.Collection("users")
-	colReset := db.Collection("password_resets")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
-	var u userModel
-	if err := colUsers.FindOne(ctx, bson.M{"email": req.Email}).Decode(&u); err != nil {
+	var u model.User
+	if err := collections.Users.FindOne(ctx, bson.M{"email": req.Email}).Decode(&u); err != nil {
 		// Do not reveal whether the email exists. Respond success either way.
 		response.Success(w, map[string]string{"status": "ok"})
 		return
@@ -212,12 +181,12 @@ func RequestPasswordReset(db *mongo.Database, w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	pr := passwordResetModel{
+	pr := model.PasswordReset{
 		Email:     req.Email,
 		OTP:       otp,
 		CreatedAt: time.Now().UTC(),
 	}
-	if _, err := colReset.InsertOne(ctx, pr); err != nil {
+	if _, err := collections.PasswordResets.InsertOne(ctx, pr); err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to save otp")
 		return
 	}
@@ -239,7 +208,7 @@ func RequestPasswordReset(db *mongo.Database, w http.ResponseWriter, r *http.Req
 }
 
 // ResetPassword verifies OTP and changes the user's password. On success, invalidate all OTPs for the email.
-func ResetPassword(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
+func ResetPassword(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	var req passwordResetConfirm
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.Error(w, http.StatusBadRequest, "invalid request")
@@ -250,14 +219,12 @@ func ResetPassword(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	colUsers := db.Collection("users")
-	colReset := db.Collection("password_resets")
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
 	cutoff := time.Now().UTC().Add(-1 * time.Hour)
-	var pr passwordResetModel
-	err := colReset.FindOne(ctx, bson.M{"email": req.Email, "otp": req.OTP, "created_at": bson.M{"$gte": cutoff}}).Decode(&pr)
+	var pr model.PasswordReset
+	err := collections.PasswordResets.FindOne(ctx, bson.M{"email": req.Email, "otp": req.OTP, "created_at": bson.M{"$gte": cutoff}}).Decode(&pr)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			response.Error(w, http.StatusBadRequest, "invalid or expired otp")
@@ -273,12 +240,12 @@ func ResetPassword(db *mongo.Database, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := colUsers.UpdateOne(ctx, bson.M{"email": req.Email}, bson.M{"$set": bson.M{"password": string(pw)}}); err != nil {
+	if _, err := collections.Users.UpdateOne(ctx, bson.M{"email": req.Email}, bson.M{"$set": bson.M{"password": string(pw)}}); err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to update password")
 		return
 	}
 
-	if _, err := colReset.DeleteMany(ctx, bson.M{"email": req.Email}); err != nil {
+	if _, err := collections.PasswordResets.DeleteMany(ctx, bson.M{"email": req.Email}); err != nil {
 		log.Printf("warning: failed to delete password resets for %s: %v", req.Email, err)
 	}
 

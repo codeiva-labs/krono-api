@@ -10,14 +10,16 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 
 	"codeiva/krono-api/app/handler"
+	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/config"
 )
 
 // App has router and db instances
 type App struct {
-	Router *mux.Router
-	DB     *mongo.Database
-	client *mongo.Client
+	Router      *mux.Router
+	DB          *mongo.Database
+	Collections *model.Collections
+	client      *mongo.Client
 }
 
 // Initialize initializes the app with predefined configuration (MongoDB)
@@ -30,6 +32,24 @@ func (a *App) Initialize(cfg *config.Config) {
 	a.client = client
 	a.DB = cfg.Database(client)
 	log.Printf("connected to MongoDB: %s (database=%s)", cfg.DB.MongoURI, cfg.DB.Database)
+
+	// Initialize collections
+	a.Collections = model.NewCollections(a.DB)
+
+	// Ensure indexes
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := a.Collections.EnsureIndexes(ctx); err != nil {
+		log.Fatalf("Could not create indexes: %v", err)
+	}
+	log.Println("Database indexes created successfully")
+
+	// Seed main categories
+	if err := model.SeedMainCategories(context.Background(), a.DB); err != nil {
+		log.Fatalf("Could not seed main categories: %v", err)
+	}
+	log.Println("Main categories seeded successfully")
+
 	a.Router = mux.NewRouter()
 	a.setRouters()
 }
@@ -94,10 +114,10 @@ func (a *App) Run(host string) {
 	log.Fatal(http.ListenAndServe(host, a.Router))
 }
 
-type RequestHandlerFunction func(db *mongo.Database, w http.ResponseWriter, r *http.Request)
+type RequestHandlerFunction func(collections *model.Collections, w http.ResponseWriter, r *http.Request)
 
 func (a *App) handleRequest(handler RequestHandlerFunction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		handler(a.DB, w, r)
+		handler(a.Collections, w, r)
 	}
 }
