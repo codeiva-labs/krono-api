@@ -119,9 +119,10 @@ func Login(collections *model.Collections, w http.ResponseWriter, r *http.Reques
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub": u.Email,
-		"iat": time.Now().Unix(),
-		"exp": time.Now().Add(24 * time.Hour).Unix(),
+		"sub":     u.Email,
+		"user_id": u.ID.Hex(),
+		"iat":     time.Now().Unix(),
+		"exp":     time.Now().Add(24 * time.Hour).Unix(),
 	})
 	signed, err := token.SignedString([]byte(secret))
 	if err != nil {

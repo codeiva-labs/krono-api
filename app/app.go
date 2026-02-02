@@ -60,11 +60,17 @@ func (a *App) setRouters() {
 
 	a.Router.Use(a.loggingMiddleware)
 
-	// Auth routes
+	// Auth routes (public)
 	a.Router.HandleFunc("/auth/register", a.handleRequest(handler.Register)).Methods("POST")
 	a.Router.HandleFunc("/auth/login", a.handleRequest(handler.Login)).Methods("POST")
 	a.Router.HandleFunc("/auth/request-password-reset", a.handleRequest(handler.RequestPasswordReset)).Methods("POST")
 	a.Router.HandleFunc("/auth/reset-password", a.handleRequest(handler.ResetPassword)).Methods("POST")
+
+	// Category routes (protected)
+	a.Router.Handle("/categories", handler.AuthMiddleware(a.handleRequest(handler.GetCategories))).Methods("GET")
+	a.Router.Handle("/categories/add", handler.AuthMiddleware(a.handleRequest(handler.CreateCategory))).Methods("POST")
+	a.Router.Handle("/categories/{category_id}/delete", handler.AuthMiddleware(a.handleRequest(handler.DeleteCategory))).Methods("DELETE")
+	a.Router.Handle("/categories/{category_id}/edit", handler.AuthMiddleware(a.handleRequest(handler.EditCategory))).Methods("PUT")
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the response status code.
