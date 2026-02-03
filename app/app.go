@@ -71,6 +71,13 @@ func (a *App) setRouters() {
 	a.Router.Handle("/categories/add", handler.AuthMiddleware(a.handleRequest(handler.CreateCategory))).Methods("POST")
 	a.Router.Handle("/categories/{category_id}/delete", handler.AuthMiddleware(a.handleRequest(handler.DeleteCategory))).Methods("DELETE")
 	a.Router.Handle("/categories/{category_id}/edit", handler.AuthMiddleware(a.handleRequest(handler.EditCategory))).Methods("PUT")
+
+	// Activity routes (protected)
+	a.Router.Handle("/activities", handler.AuthMiddleware(a.handleRequest(handler.GetActivities))).Methods("GET")
+	a.Router.Handle("/activities/{activity_id}", handler.AuthMiddleware(a.handleRequest(handler.GetActivityDetail))).Methods("GET")
+	a.Router.Handle("/activities/add", handler.AuthMiddleware(a.handleRequest(handler.AddActivity))).Methods("POST")
+	a.Router.Handle("/activities/{activity_id}/edit", handler.AuthMiddleware(a.handleRequest(handler.EditActivity))).Methods("PUT")
+	a.Router.Handle("/activities/{activity_id}/delete", handler.AuthMiddleware(a.handleRequest(handler.DeleteActivity))).Methods("DELETE")
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the response status code.
