@@ -1,34 +1,54 @@
-# Stage 1: Builder
-# Use an official Golang image to build the application
-FROM golang:1.22-alpine AS builder
+# Build stage
+FROM golang:1.25.6-alpine AS builder
 
-# Set the working directory inside the container
+# Install build dependencies
+RUN apk add --no-cache git ca-certificates tzdata
+
+# Set working directory
 WORKDIR /app
 
-# Copy the go.mod and go.sum files and download dependencies
+# Copy go mod files
 COPY go.mod go.sum ./
+
+# Download dependencies
 RUN go mod download
 
-# Copy the rest of the source code
+# Copy source code
 COPY . .
 
 # Build the application
-# CGO_ENABLED=0 disables cgo to ensure a statically linked executable
-# -o app specifies the output executable name
-RUN CGO_ENABLED=0 go build -o app .
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 
-# Stage 2: Production
-# Use a minimal base image for the final production container
+# Final stage
 FROM alpine:latest
 
-# Set the working directory for the final application
-WORKDIR /root/
+# Install ca-certificates for HTTPS and curl for healthcheck
+RUN apk --no-cache add ca-certificates curl
 
-# Copy the built executable from the builder stage
-COPY --from=builder /app/app .
+# Create non-root user
+RUN addgroup -g 1000 appuser && \
+    adduser -D -u 1000 -G appuser appuser
 
-# Expose the port your Go application listens on (default is often 8080 or 3000)
-EXPOSE 8080
+WORKDIR /home/appuser
 
-# Command to run the executable
-CMD ["./app"]
+# Copy binary from builder
+COPY --from=builder /app/main .
+
+# Change ownership
+RUN chown -R appuser:appuser /home/appuser
+
+# Switch to non-root user
+USER appuser
+
+# Set default port (can be overridden)
+ENV PORT=3000
+
+# Expose port
+EXPOSE $PORT
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Run the application
+CMD ["./main"]
