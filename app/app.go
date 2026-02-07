@@ -63,6 +63,7 @@ func (a *App) setRouters() {
 	// Auth routes (public)
 	a.Router.HandleFunc("/auth/register", a.handleRequest(handler.Register)).Methods("POST")
 	a.Router.HandleFunc("/auth/login", a.handleRequest(handler.Login)).Methods("POST")
+	a.Router.HandleFunc("/auth/authenticate-google", a.handleRequest(handler.AuthenticateWithGoogle)).Methods("POST")
 	a.Router.HandleFunc("/auth/request-password-reset", a.handleRequest(handler.RequestPasswordReset)).Methods("POST")
 	a.Router.HandleFunc("/auth/reset-password", a.handleRequest(handler.ResetPassword)).Methods("POST")
 
