@@ -79,6 +79,9 @@ func (a *App) setRouters() {
 	a.Router.Handle("/activities/add", handler.AuthMiddleware(a.handleRequest(handler.AddActivity))).Methods("POST")
 	a.Router.Handle("/activities/{activity_id}/edit", handler.AuthMiddleware(a.handleRequest(handler.EditActivity))).Methods("PUT")
 	a.Router.Handle("/activities/{activity_id}/delete", handler.AuthMiddleware(a.handleRequest(handler.DeleteActivity))).Methods("DELETE")
+
+	// Statistics routes (protected)
+	a.Router.Handle("/stats/daily", handler.AuthMiddleware(a.handleRequest(handler.GetDailyStats))).Methods("GET")
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the response status code.
