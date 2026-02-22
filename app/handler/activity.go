@@ -25,16 +25,17 @@ type activityRequest struct {
 }
 
 type activityResponse struct {
-	ID          string   `json:"id"`
-	CategoryID  string   `json:"category_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	StartTime   string   `json:"start_time"`
-	EndTime     *string  `json:"end_time,omitempty"`
-	Duration    int64    `json:"duration,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	CreatedAt   string   `json:"created_at"`
-	UpdatedAt   string   `json:"updated_at"`
+	ID          string            `json:"id"`
+	CategoryID  string            `json:"category_id"`
+	Category    *categoryResponse `json:"category,omitempty"`
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	StartTime   string            `json:"start_time"`
+	EndTime     *string           `json:"end_time,omitempty"`
+	Duration    int64             `json:"duration,omitempty"`
+	Tags        []string          `json:"tags,omitempty"`
+	CreatedAt   string            `json:"created_at"`
+	UpdatedAt   string            `json:"updated_at"`
 }
 
 // GetActivities returns all activities for the authenticated user
@@ -51,21 +52,43 @@ func GetActivities(collections *model.Collections, w http.ResponseWriter, r *htt
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	filter := bson.M{"user_id": userObjID}
-	cursor, err := collections.Activities.Find(ctx, filter)
+
+	// Use aggregation pipeline to join with categories
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$match", Value: bson.M{"user_id": userObjID}}},
+		bson.D{{Key: "$lookup", Value: bson.M{
+			"from":         "categories",
+			"localField":   "category_id",
+			"foreignField": "_id",
+			"as":           "category",
+		}}},
+		bson.D{{Key: "$unwind", Value: bson.M{
+			"path":                       "$category",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+	}
+
+	cursor, err := collections.Activities.Aggregate(ctx, pipeline)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to fetch activities")
 		return
 	}
 	defer cursor.Close(ctx)
-	var activities []model.Activity
+
+	type activityWithCategory struct {
+		model.Activity `bson:",inline"`
+		Category       *model.Category `bson:"category,omitempty"`
+	}
+
+	var activities []activityWithCategory
 	if err := cursor.All(ctx, &activities); err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to decode activities")
 		return
 	}
+
 	result := make([]activityResponse, len(activities))
 	for i, act := range activities {
-		result[i] = toActivityResponse(act)
+		result[i] = toActivityResponse(act.Activity, act.Category)
 	}
 	response.Success(w, result)
 }
@@ -95,17 +118,49 @@ func GetActivityDetail(collections *model.Collections, w http.ResponseWriter, r 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	var activity model.Activity
-	err = collections.Activities.FindOne(ctx, bson.M{"_id": activityObjID, "user_id": userObjID}).Decode(&activity)
+
+	// Use aggregation pipeline to join with category
+	pipeline := mongo.Pipeline{
+		bson.D{{Key: "$match", Value: bson.M{
+			"_id":     activityObjID,
+			"user_id": userObjID,
+		}}},
+		bson.D{{Key: "$lookup", Value: bson.M{
+			"from":         "categories",
+			"localField":   "category_id",
+			"foreignField": "_id",
+			"as":           "category",
+		}}},
+		bson.D{{Key: "$unwind", Value: bson.M{
+			"path":                       "$category",
+			"preserveNullAndEmptyArrays": true,
+		}}},
+	}
+
+	type activityWithCategory struct {
+		model.Activity `bson:",inline"`
+		Category       *model.Category `bson:"category,omitempty"`
+	}
+
+	cursor, err := collections.Activities.Aggregate(ctx, pipeline)
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			response.Error(w, http.StatusNotFound, "activity not found")
-			return
-		}
 		response.Error(w, http.StatusInternalServerError, "failed to fetch activity")
 		return
 	}
-	response.Success(w, toActivityResponse(activity))
+	defer cursor.Close(ctx)
+
+	if !cursor.Next(ctx) {
+		response.Error(w, http.StatusNotFound, "activity not found")
+		return
+	}
+
+	var result activityWithCategory
+	if err := cursor.Decode(&result); err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to decode activity")
+		return
+	}
+
+	response.Success(w, toActivityResponse(result.Activity, result.Category))
 }
 
 // AddActivity creates a new activity for the authenticated user
@@ -155,7 +210,17 @@ func AddActivity(collections *model.Collections, w http.ResponseWriter, r *http.
 		return
 	}
 	activity.ID = result.InsertedID.(primitive.ObjectID)
-	response.Created(w, toActivityResponse(activity))
+
+	// Fetch category for the response
+	var category model.Category
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel2()
+	err = collections.Categories.FindOne(ctx2, bson.M{"_id": categoryObjID}).Decode(&category)
+	if err != nil {
+		response.Created(w, toActivityResponse(activity, nil))
+	} else {
+		response.Created(w, toActivityResponse(activity, &category))
+	}
 }
 
 // EditActivity updates an activity for the authenticated user
@@ -259,7 +324,7 @@ func DeleteActivity(collections *model.Collections, w http.ResponseWriter, r *ht
 }
 
 // toActivityResponse converts a model.Activity to activityResponse
-func toActivityResponse(act model.Activity) activityResponse {
+func toActivityResponse(act model.Activity, cat *model.Category) activityResponse {
 	resp := activityResponse{
 		ID:          act.ID.Hex(),
 		CategoryID:  act.CategoryID.Hex(),
@@ -274,6 +339,10 @@ func toActivityResponse(act model.Activity) activityResponse {
 		end := act.EndTime.Format(time.RFC3339)
 		resp.EndTime = &end
 		resp.Duration = act.Duration
+	}
+	if cat != nil {
+		catResp := toCategoryResponse(*cat)
+		resp.Category = &catResp
 	}
 	return resp
 }
