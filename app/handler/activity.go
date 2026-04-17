@@ -53,9 +53,39 @@ func GetActivities(collections *model.Collections, w http.ResponseWriter, r *htt
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
+	// Build match filter
+	matchFilter := bson.D{{Key: "user_id", Value: userObjID}}
+
+	if startStr := r.URL.Query().Get("start"); startStr != "" {
+		startTime, err := time.Parse(time.RFC3339, startStr)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid start time, use RFC3339 format")
+			return
+		}
+		matchFilter = append(matchFilter, bson.E{Key: "start_time", Value: bson.D{{Key: "$gte", Value: startTime}}})
+	}
+
+	if endStr := r.URL.Query().Get("end"); endStr != "" {
+		endTime, err := time.Parse(time.RFC3339, endStr)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid end time, use RFC3339 format")
+			return
+		}
+		matchFilter = append(matchFilter, bson.E{Key: "end_time", Value: bson.D{{Key: "$lte", Value: endTime}}})
+	}
+
+	if categoryIDStr := r.URL.Query().Get("category_id"); categoryIDStr != "" {
+		categoryObjID, err := primitive.ObjectIDFromHex(categoryIDStr)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid category id")
+			return
+		}
+		matchFilter = append(matchFilter, bson.E{Key: "category_id", Value: categoryObjID})
+	}
+
 	// Use aggregation pipeline to join with categories
 	pipeline := mongo.Pipeline{
-		bson.D{{Key: "$match", Value: bson.M{"user_id": userObjID}}},
+		bson.D{{Key: "$match", Value: matchFilter}},
 		bson.D{{Key: "$lookup", Value: bson.M{
 			"from":         "categories",
 			"localField":   "category_id",
