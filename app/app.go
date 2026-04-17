@@ -9,6 +9,7 @@ import (
 	"github.com/gorilla/mux"
 	"go.mongodb.org/mongo-driver/mongo"
 
+	"codeiva/krono-api/app/db"
 	"codeiva/krono-api/app/handler"
 	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/config"
@@ -45,7 +46,7 @@ func (a *App) Initialize(cfg *config.Config) {
 	log.Println("Database indexes created successfully")
 
 	// Seed main categories
-	if err := model.SeedMainCategories(context.Background(), a.DB); err != nil {
+	if err := db.SeedMainCategories(context.Background(), a.DB); err != nil {
 		log.Fatalf("Could not seed main categories: %v", err)
 	}
 	log.Println("Main categories seeded successfully")
@@ -82,6 +83,7 @@ func (a *App) setRouters() {
 
 	// Statistics routes (protected)
 	a.Router.Handle("/stats/daily", handler.AuthMiddleware(a.handleRequest(handler.GetDailyStats))).Methods("GET")
+	a.Router.Handle("/stats/most-used-categories", handler.AuthMiddleware(a.handleRequest(handler.GetMostUsedCategories))).Methods("GET")
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the response status code.

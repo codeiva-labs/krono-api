@@ -20,9 +20,9 @@ type CategoryDuration struct {
 }
 
 type DailyStats struct {
-	Date       string             `json:"date"` // YYYY-MM-DD format
-	Categories []CategoryDuration `json:"categories"`
-	TotalDuration int64           `json:"total_duration"` // total seconds for the day
+	Date          string             `json:"date"` // YYYY-MM-DD format
+	Categories    []CategoryDuration `json:"categories"`
+	TotalDuration int64              `json:"total_duration"` // total seconds for the day
 }
 
 type StatsResponse struct {
@@ -34,6 +34,7 @@ type StatsResponse struct {
 }
 
 // GetDailyStats returns daily activity statistics grouped by category for a specified period
+// @author Farhan<farhan@codeiva.com>
 func GetDailyStats(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -211,4 +212,162 @@ func GetDailyStats(collections *model.Collections, w http.ResponseWriter, r *htt
 	}
 
 	response.Success(w, statsResponse)
+}
+
+// GetMostUsedCategories returns the most used categories for a specified period
+// @author Farhan<farhan@codeiva.com>
+func GetMostUsedCategories(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
+	userID := r.Context().Value("user_id")
+	if userID == nil {
+		response.Error(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	userObjID, err := primitive.ObjectIDFromHex(userID.(string))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+
+	// Get user timezone from header
+	timezoneStr := r.Header.Get("X-Timezone")
+	if timezoneStr == "" {
+		timezoneStr = "UTC"
+	}
+
+	loc, err := time.LoadLocation(timezoneStr)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid timezone")
+		return
+	}
+
+	// Parse query parameters
+	period := r.URL.Query().Get("period")
+	if period == "" {
+		period = "day"
+	}
+
+	if period != "day" && period != "week" && period != "month" && period != "year" {
+		response.Error(w, http.StatusBadRequest, "period must be 'day', 'week', 'month', or 'year'")
+		return
+	}
+
+	now := time.Now().In(loc)
+	var startDate time.Time
+	var endDate time.Time = now
+
+	switch period {
+	case "day":
+		// If period is 'day', the start date should be 24 hours ago instead of start of the day
+		startDate = now.Add(-24 * time.Hour)
+	case "week":
+		startDate = now.AddDate(0, 0, -7)
+	case "month":
+		startDate = now.AddDate(0, -1, 0)
+	case "year":
+		startDate = now.AddDate(-1, 0, 0)
+	}
+
+	if period != "day" {
+		startDate = time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, loc)
+		endDate = time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 999999999, loc)
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	pipeline := mongo.Pipeline{
+		// Stage 1: Match activities for this user within date range
+		{{Key: "$match", Value: bson.D{
+			{Key: "user_id", Value: userObjID},
+			{Key: "start_time", Value: bson.D{
+				{Key: "$gte", Value: startDate},
+				{Key: "$lte", Value: endDate},
+			}},
+			{Key: "end_time", Value: bson.D{{Key: "$ne", Value: nil}}},
+			{Key: "duration", Value: bson.D{{Key: "$gt", Value: 0}}},
+		}}},
+		// Stage 2: Group by category_id, sum durations and count activities
+		{{Key: "$group", Value: bson.D{
+			{Key: "_id", Value: "$category_id"},
+			{Key: "total_duration", Value: bson.D{{Key: "$sum", Value: "$duration"}}},
+			{Key: "activity_count", Value: bson.D{{Key: "$sum", Value: 1}}},
+		}}},
+		// Stage 3: Lookup category details
+		{{Key: "$lookup", Value: bson.D{
+			{Key: "from", Value: "categories"},
+			{Key: "localField", Value: "_id"},
+			{Key: "foreignField", Value: "_id"},
+			{Key: "as", Value: "category"},
+		}}},
+		{{Key: "$unwind", Value: bson.D{
+			{Key: "path", Value: "$category"},
+			{Key: "preserveNullAndEmptyArrays", Value: true},
+		}}},
+		// Stage 4: Sort by total duration descending
+		{{Key: "$sort", Value: bson.D{{Key: "total_duration", Value: -1}}}},
+	}
+
+	cursor, err := collections.Activities.Aggregate(ctx, pipeline)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to fetch statistics")
+		return
+	}
+	defer cursor.Close(ctx)
+
+	type categoryStatResult struct {
+		CategoryID    primitive.ObjectID `bson:"_id"`
+		TotalDuration int64              `bson:"total_duration"`
+		ActivityCount int64              `bson:"activity_count"`
+		Category      *model.Category    `bson:"category"`
+	}
+
+	var results []categoryStatResult
+	if err := cursor.All(ctx, &results); err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to decode statistics")
+		return
+	}
+
+	type categoryStatResponse struct {
+		CategoryID    string  `json:"category_id"`
+		CategoryName  string  `json:"category_name"`
+		Color         string  `json:"color,omitempty"`
+		Icon          string  `json:"icon,omitempty"`
+		TotalDuration int64   `json:"total_duration"`
+		ActivityCount int64   `json:"activity_count"`
+		Percentage    float64 `json:"percentage"`
+	}
+
+	// Calculate total duration across all categories
+	var grandTotal int64
+	for _, r := range results {
+		grandTotal += r.TotalDuration
+	}
+
+	items := make([]categoryStatResponse, len(results))
+	for i, r := range results {
+		item := categoryStatResponse{
+			CategoryID:    r.CategoryID.Hex(),
+			TotalDuration: r.TotalDuration,
+			ActivityCount: r.ActivityCount,
+		}
+		if r.Category != nil {
+			item.CategoryName = r.Category.Name
+			item.Color = r.Category.Color
+			item.Icon = r.Category.Icon
+		}
+		if grandTotal > 0 {
+			item.Percentage = float64(r.TotalDuration) / float64(grandTotal) * 100
+		}
+		items[i] = item
+	}
+
+	response.Success(w, map[string]any{
+		"period":         period,
+		"start_date":     startDate.Format("2006-01-02"),
+		"end_date":       endDate.Format("2006-01-02"),
+		"timezone":       timezoneStr,
+		"total_duration": grandTotal,
+		"categories":     items,
+	})
 }
