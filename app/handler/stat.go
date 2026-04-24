@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"time"
+	_ "time/tzdata"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"

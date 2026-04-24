@@ -23,7 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o main .
 FROM alpine:latest
 
 # Install ca-certificates for HTTPS and curl for healthcheck
-RUN apk --no-cache add ca-certificates curl
+RUN apk --no-cache add ca-certificates curl tzdata
 
 # Create non-root user
 RUN addgroup -g 1000 appuser && \
