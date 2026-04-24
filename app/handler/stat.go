@@ -57,7 +57,7 @@ func GetDailyStats(collections *model.Collections, w http.ResponseWriter, r *htt
 	// Parse timezone
 	loc, err := time.LoadLocation(timezoneStr)
 	if err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid timezone")
+		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
