@@ -50,7 +50,10 @@ func GetActivities(collections *model.Collections, w http.ResponseWriter, r *htt
 	defer cancel()
 
 	// Build match filter
-	matchFilter := bson.D{{Key: "user_id", Value: userObjID}}
+	matchFilter := bson.D{
+		{Key: "user_id", Value: userObjID},
+		{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
+	}
 
 	if startStr := r.URL.Query().Get("start"); startStr != "" {
 		startTime, err := time.Parse(time.RFC3339, startStr)
@@ -148,8 +151,9 @@ func GetActivityDetail(collections *model.Collections, w http.ResponseWriter, r 
 	// Use aggregation pipeline to join with category
 	pipeline := mongo.Pipeline{
 		bson.D{{Key: "$match", Value: bson.M{
-			"_id":     activityObjID,
-			"user_id": userObjID,
+			"_id":      activityObjID,
+			"user_id":  userObjID,
+			"archived": bson.M{"$ne": true},
 		}}},
 		bson.D{{Key: "$lookup", Value: bson.M{
 			"from":         "categories",
@@ -296,7 +300,8 @@ func EditActivity(collections *model.Collections, w http.ResponseWriter, r *http
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	result, err := collections.Activities.UpdateOne(ctx, bson.M{"_id": activityObjID, "user_id": userObjID}, bson.M{"$set": update})
+	filter := bson.M{"_id": activityObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}}
+	result, err := collections.Activities.UpdateOne(ctx, filter, bson.M{"$set": update})
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to update activity")
 		return
@@ -333,7 +338,8 @@ func DeleteActivity(collections *model.Collections, w http.ResponseWriter, r *ht
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	result, err := collections.Activities.DeleteOne(ctx, bson.M{"_id": activityObjID, "user_id": userObjID})
+	filter := bson.M{"_id": activityObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}}
+	result, err := collections.Activities.DeleteOne(ctx, filter)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to delete activity")
 		return

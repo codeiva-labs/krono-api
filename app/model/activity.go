@@ -15,6 +15,10 @@ type Activity struct {
 	StartTime  time.Time          `bson:"start_time" json:"start_time"`
 	EndTime    *time.Time         `bson:"end_time,omitempty" json:"end_time,omitempty"` // nil if activity is ongoing
 	Duration   int64              `bson:"duration,omitempty" json:"duration,omitempty"` // in seconds, calculated when ended
-	CreatedAt  time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt  time.Time          `bson:"updated_at" json:"updated_at"`
+	// Archived is set when the owning user chooses "start fresh" on a new
+	// device: existing activities are kept but hidden from normal reads.
+	Archived   bool       `bson:"archived,omitempty" json:"-"`
+	ArchivedAt *time.Time `bson:"archived_at,omitempty" json:"-"`
+	CreatedAt  time.Time  `bson:"created_at" json:"created_at"`
+	UpdatedAt  time.Time  `bson:"updated_at" json:"updated_at"`
 }

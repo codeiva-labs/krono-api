@@ -16,6 +16,10 @@ type Category struct {
 	IsMain      bool                `bson:"is_main" json:"is_main"`                         // true for main categories
 	ParentID    *primitive.ObjectID `bson:"parent_id,omitempty" json:"parent_id,omitempty"` // nil for main categories
 	UserID      *primitive.ObjectID `bson:"user_id,omitempty" json:"user_id,omitempty"`     // nil for main categories, set for custom
-	CreatedAt   time.Time           `bson:"created_at" json:"created_at"`
-	UpdatedAt   time.Time           `bson:"updated_at" json:"updated_at"`
+	// Archived is set on a user's custom category when they choose "start
+	// fresh" on a new device; main categories are never archived.
+	Archived   bool       `bson:"archived,omitempty" json:"-"`
+	ArchivedAt *time.Time `bson:"archived_at,omitempty" json:"-"`
+	CreatedAt  time.Time  `bson:"created_at" json:"created_at"`
+	UpdatedAt  time.Time  `bson:"updated_at" json:"updated_at"`
 }

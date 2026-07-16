@@ -59,6 +59,7 @@ func GetCategories(collections *model.Collections, w http.ResponseWriter, r *htt
 			{"is_main": true},
 			{"user_id": userObjID},
 		},
+		"archived": bson.M{"$ne": true},
 	}
 
 	cursor, err := collections.Categories.Find(ctx, filter)
@@ -190,7 +191,7 @@ func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 
 	// Verify category exists and is owned by the user
 	var category model.Category
-	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID}).Decode(&category)
+	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}}).Decode(&category)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			response.Error(w, http.StatusNotFound, "category not found or not owned by you")
@@ -266,7 +267,7 @@ func EditCategory(collections *model.Collections, w http.ResponseWriter, r *http
 
 	// Verify category exists and is owned by the user
 	var category model.Category
-	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID}).Decode(&category)
+	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}}).Decode(&category)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			response.Error(w, http.StatusNotFound, "category not found or not owned by you")

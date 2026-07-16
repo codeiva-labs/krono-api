@@ -19,6 +19,14 @@ type User struct {
 	Password  string             `bson:"password" json:"-"` // never expose in JSON
 	Name      string             `bson:"name" json:"name"`
 	Providers []ProviderLink     `bson:"providers,omitempty" json:"providers,omitempty"` // Multiple linked providers
-	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
-	UpdatedAt time.Time          `bson:"updated_at" json:"updated_at"`
+	// CurrentSessionID is embedded in the JWT issued at the most recent login.
+	// A request whose token carries a different (or missing) session id is
+	// treated as logged out, which is how logging in on a new device forces
+	// out any previously logged-in device.
+	CurrentSessionID string `bson:"current_session_id,omitempty" json:"-"`
+	// LastDeviceID is the device_id supplied at the most recent login/auth,
+	// used to detect when a login comes from a device we haven't seen before.
+	LastDeviceID string    `bson:"last_device_id,omitempty" json:"-"`
+	CreatedAt    time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt    time.Time `bson:"updated_at" json:"updated_at"`
 }
