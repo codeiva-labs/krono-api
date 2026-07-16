@@ -16,26 +16,22 @@ import (
 )
 
 type activityRequest struct {
-	CategoryID  string     `json:"category_id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description,omitempty"`
-	StartTime   time.Time  `json:"start_time"`
-	EndTime     *time.Time `json:"end_time,omitempty"`
-	Tags        []string   `json:"tags,omitempty"`
+	CategoryID string     `json:"category_id"`
+	Title      string     `json:"title"`
+	StartTime  time.Time  `json:"start_time"`
+	EndTime    *time.Time `json:"end_time,omitempty"`
 }
 
 type activityResponse struct {
-	ID          string            `json:"id"`
-	CategoryID  string            `json:"category_id"`
-	Category    *categoryResponse `json:"category,omitempty"`
-	Title       string            `json:"title"`
-	Description string            `json:"description,omitempty"`
-	StartTime   string            `json:"start_time"`
-	EndTime     *string           `json:"end_time,omitempty"`
-	Duration    int64             `json:"duration,omitempty"`
-	Tags        []string          `json:"tags,omitempty"`
-	CreatedAt   string            `json:"created_at"`
-	UpdatedAt   string            `json:"updated_at"`
+	ID         string            `json:"id"`
+	CategoryID string            `json:"category_id"`
+	Category   *categoryResponse `json:"category,omitempty"`
+	Title      string            `json:"title"`
+	StartTime  string            `json:"start_time"`
+	EndTime    *string           `json:"end_time,omitempty"`
+	Duration   int64             `json:"duration,omitempty"`
+	CreatedAt  string            `json:"created_at"`
+	UpdatedAt  string            `json:"updated_at"`
 }
 
 // GetActivities returns all activities for the authenticated user
@@ -221,15 +217,13 @@ func AddActivity(collections *model.Collections, w http.ResponseWriter, r *http.
 	}
 	now := time.Now().UTC()
 	activity := model.Activity{
-		UserID:      userObjID,
-		CategoryID:  categoryObjID,
-		Title:       req.Title,
-		Description: req.Description,
-		StartTime:   req.StartTime,
-		EndTime:     req.EndTime,
-		Tags:        req.Tags,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		UserID:     userObjID,
+		CategoryID: categoryObjID,
+		Title:      req.Title,
+		StartTime:  req.StartTime,
+		EndTime:    req.EndTime,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 	if req.EndTime != nil {
 		activity.Duration = int64(req.EndTime.Sub(req.StartTime).Seconds())
@@ -282,10 +276,8 @@ func EditActivity(collections *model.Collections, w http.ResponseWriter, r *http
 		return
 	}
 	update := bson.M{
-		"title":       req.Title,
-		"description": req.Description,
-		"tags":        req.Tags,
-		"updated_at":  time.Now().UTC(),
+		"title":      req.Title,
+		"updated_at": time.Now().UTC(),
 	}
 	if req.CategoryID != "" {
 		categoryObjID, err := primitive.ObjectIDFromHex(req.CategoryID)
@@ -356,14 +348,12 @@ func DeleteActivity(collections *model.Collections, w http.ResponseWriter, r *ht
 // toActivityResponse converts a model.Activity to activityResponse
 func toActivityResponse(act model.Activity, cat *model.Category) activityResponse {
 	resp := activityResponse{
-		ID:          act.ID.Hex(),
-		CategoryID:  act.CategoryID.Hex(),
-		Title:       act.Title,
-		Description: act.Description,
-		StartTime:   act.StartTime.Format(time.RFC3339),
-		Tags:        act.Tags,
-		CreatedAt:   act.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   act.UpdatedAt.Format(time.RFC3339),
+		ID:         act.ID.Hex(),
+		CategoryID: act.CategoryID.Hex(),
+		Title:      act.Title,
+		StartTime:  act.StartTime.Format(time.RFC3339),
+		CreatedAt:  act.CreatedAt.Format(time.RFC3339),
+		UpdatedAt:  act.UpdatedAt.Format(time.RFC3339),
 	}
 	if act.EndTime != nil {
 		end := act.EndTime.Format(time.RFC3339)
