@@ -68,6 +68,10 @@ func (a *App) setRouters() {
 	a.Router.HandleFunc("/auth/request-password-reset", a.handleRequest(handler.RequestPasswordReset)).Methods("POST")
 	a.Router.HandleFunc("/auth/reset-password", a.handleRequest(handler.ResetPassword)).Methods("POST")
 
+	// Profile routes (protected)
+	a.Router.Handle("/profile", handler.AuthMiddleware(a.handleRequest(handler.GetProfile))).Methods("GET")
+	a.Router.Handle("/profile", handler.AuthMiddleware(a.handleRequest(handler.UpdateProfile))).Methods("PUT")
+
 	// Category routes (protected)
 	a.Router.Handle("/categories", handler.AuthMiddleware(a.handleRequest(handler.GetCategories))).Methods("GET")
 	a.Router.Handle("/categories/add", handler.AuthMiddleware(a.handleRequest(handler.CreateCategory))).Methods("POST")
