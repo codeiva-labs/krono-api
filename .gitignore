@@ -37,3 +37,9 @@ $GOMODCACHE
 # Temporary files
 *~
 *.swp
+
+# Claude / GitNexus
+.claude/
+.gitnexus/
+CLAUDE.md
+AGENTS.md
