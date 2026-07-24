@@ -11,7 +11,6 @@ import (
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"codeiva/krono-api/app/db"
 	"codeiva/krono-api/app/handler"
 	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/config"
@@ -47,12 +46,6 @@ func (a *App) Initialize(cfg *config.Config) {
 		log.Fatalf("Could not create indexes: %v", err)
 	}
 	log.Println("Database indexes created successfully")
-
-	// Seed main categories
-	if err := db.SeedMainCategories(context.Background(), a.DB); err != nil {
-		log.Fatalf("Could not seed main categories: %v", err)
-	}
-	log.Println("Main categories seeded successfully")
 
 	a.Router = mux.NewRouter()
 	a.setRouters()

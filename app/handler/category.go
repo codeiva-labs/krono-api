@@ -16,27 +16,25 @@ import (
 )
 
 type createCategoryRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Color       string `json:"color,omitempty"`
-	Icon        string `json:"icon,omitempty"`
-	ParentID    string `json:"parent_id"` // required - must reference a main category
+	Name     string `json:"name"`
+	Color    string `json:"color,omitempty"`
+	Icon     string `json:"icon,omitempty"`
+	ParentID string `json:"parent_id,omitempty"` // omit to create a main category; set to one of the caller's own main categories to create a subcategory
 }
 
 type categoryResponse struct {
-	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description,omitempty"`
-	Color       string  `json:"color,omitempty"`
-	Icon        string  `json:"icon,omitempty"`
-	IsMain      bool    `json:"is_main"`
-	ParentID    *string `json:"parent_id,omitempty"`
-	UserID      *string `json:"user_id,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID        string  `json:"id"`
+	Name      string  `json:"name"`
+	Color     string  `json:"color,omitempty"`
+	Icon      string  `json:"icon,omitempty"`
+	IsMain    bool    `json:"is_main"`
+	ParentID  *string `json:"parent_id,omitempty"`
+	UserID    *string `json:"user_id,omitempty"`
+	CreatedAt string  `json:"created_at"`
+	UpdatedAt string  `json:"updated_at"`
 }
 
-// GetCategories returns all main categories plus the authenticated user's custom categories
+// GetCategories returns the authenticated user's own categories (main and sub)
 func GetCategories(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -53,12 +51,9 @@ func GetCategories(collections *model.Collections, w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Find all main categories OR categories created by this user
+	// A user's categories (main and sub) are always fully self-owned
 	filter := bson.M{
-		"$or": []bson.M{
-			{"is_main": true},
-			{"user_id": userObjID},
-		},
+		"user_id":  userObjID,
 		"archived": bson.M{"$ne": true},
 	}
 
@@ -84,7 +79,7 @@ func GetCategories(collections *model.Collections, w http.ResponseWriter, r *htt
 	response.Success(w, result)
 }
 
-// CreateCategory creates a new custom category for the authenticated user
+// CreateCategory creates a new main category (no parent_id) or subcategory (parent_id set) for the authenticated user
 func CreateCategory(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -103,11 +98,6 @@ func CreateCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 		return
 	}
 
-	if req.ParentID == "" {
-		response.Error(w, http.StatusBadRequest, "parent_id is required")
-		return
-	}
-
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
 
@@ -117,36 +107,41 @@ func CreateCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 		return
 	}
 
-	parentObjID, err := primitive.ObjectIDFromHex(req.ParentID)
-	if err != nil {
-		response.Error(w, http.StatusBadRequest, "invalid parent_id")
-		return
-	}
-
-	// Verify parent category exists and is a main category
-	var parent model.Category
-	err = collections.Categories.FindOne(ctx, bson.M{"_id": parentObjID, "is_main": true}).Decode(&parent)
-	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			response.Error(w, http.StatusBadRequest, "parent category must be a main category")
-			return
-		}
-		response.Error(w, http.StatusInternalServerError, "failed to verify parent category")
-		return
-	}
-
-	// Create new category
 	now := time.Now().UTC()
 	category := model.Category{
-		Name:        req.Name,
-		Description: req.Description,
-		Color:       req.Color,
-		Icon:        req.Icon,
-		IsMain:      false,
-		ParentID:    &parentObjID,
-		UserID:      &userObjID,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		Name:      req.Name,
+		Color:     req.Color,
+		Icon:      req.Icon,
+		UserID:    &userObjID,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+
+	if req.ParentID == "" {
+		// No parent: this is a new main category owned by the caller
+		category.IsMain = true
+		category.ParentID = nil
+	} else {
+		parentObjID, err := primitive.ObjectIDFromHex(req.ParentID)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, "invalid parent_id")
+			return
+		}
+
+		// Parent must be a main category owned by the caller
+		var parent model.Category
+		err = collections.Categories.FindOne(ctx, bson.M{"_id": parentObjID, "is_main": true, "user_id": userObjID}).Decode(&parent)
+		if err != nil {
+			if err == mongo.ErrNoDocuments {
+				response.Error(w, http.StatusBadRequest, "parent_id must reference one of your own main categories")
+				return
+			}
+			response.Error(w, http.StatusInternalServerError, "failed to verify parent category")
+			return
+		}
+
+		category.IsMain = false
+		category.ParentID = &parentObjID
 	}
 
 	result, err := collections.Categories.InsertOne(ctx, category)
@@ -159,7 +154,7 @@ func CreateCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 	response.Created(w, toCategoryResponse(category))
 }
 
-// DeleteCategory deletes a custom category if it's owned by the user and not used in any activity
+// DeleteCategory deletes a category owned by the user, as long as it has no subcategories (if main) and isn't used in any activity
 func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -201,10 +196,17 @@ func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 		return
 	}
 
-	// Check if category is a main category (cannot delete main categories)
+	// If this is a main category, it can't be deleted while subcategories still reference it
 	if category.IsMain {
-		response.Error(w, http.StatusForbidden, "cannot delete main category")
-		return
+		subCount, err := collections.Categories.CountDocuments(ctx, bson.M{"parent_id": categoryObjID})
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, "failed to check subcategory usage")
+			return
+		}
+		if subCount > 0 {
+			response.Error(w, http.StatusConflict, "cannot delete category that has subcategories")
+			return
+		}
 	}
 
 	// Check if category is used in any activity
@@ -229,7 +231,7 @@ func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 	response.Success(w, map[string]string{"status": "deleted"})
 }
 
-// EditCategory updates a user's custom category (name/description/color/icon)
+// EditCategory updates a user's category (name/color/icon), main or sub
 func EditCategory(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -277,18 +279,10 @@ func EditCategory(collections *model.Collections, w http.ResponseWriter, r *http
 		return
 	}
 
-	if category.IsMain {
-		response.Error(w, http.StatusForbidden, "cannot edit main category")
-		return
-	}
-
 	// Build update document with only provided fields
 	set := bson.M{"updated_at": time.Now().UTC()}
 	if req.Name != "" {
 		set["name"] = req.Name
-	}
-	if req.Description != "" {
-		set["description"] = req.Description
 	}
 	if req.Color != "" {
 		set["color"] = req.Color
@@ -321,14 +315,13 @@ func EditCategory(collections *model.Collections, w http.ResponseWriter, r *http
 // toCategoryResponse converts a model.Category to categoryResponse
 func toCategoryResponse(cat model.Category) categoryResponse {
 	resp := categoryResponse{
-		ID:          cat.ID.Hex(),
-		Name:        cat.Name,
-		Description: cat.Description,
-		Color:       cat.Color,
-		Icon:        cat.Icon,
-		IsMain:      cat.IsMain,
-		CreatedAt:   cat.CreatedAt.Format(time.RFC3339),
-		UpdatedAt:   cat.UpdatedAt.Format(time.RFC3339),
+		ID:        cat.ID.Hex(),
+		Name:      cat.Name,
+		Color:     cat.Color,
+		Icon:      cat.Icon,
+		IsMain:    cat.IsMain,
+		CreatedAt: cat.CreatedAt.Format(time.RFC3339),
+		UpdatedAt: cat.UpdatedAt.Format(time.RFC3339),
 	}
 
 	if cat.ParentID != nil {

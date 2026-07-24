@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/api/idtoken"
 
+	"codeiva/krono-api/app/db"
 	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/pkg/mail"
 	"codeiva/krono-api/pkg/response"
@@ -80,7 +81,7 @@ func Register(collections *model.Collections, w http.ResponseWriter, r *http.Req
 		UpdatedAt: time.Now().UTC(),
 	}
 
-	_, err = collections.Users.InsertOne(ctx, u)
+	result, err := collections.Users.InsertOne(ctx, u)
 	if err != nil {
 		// if duplicate key
 		if mongo.IsDuplicateKeyError(err) {
@@ -88,6 +89,12 @@ func Register(collections *model.Collections, w http.ResponseWriter, r *http.Req
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+	u.ID = result.InsertedID.(primitive.ObjectID)
+
+	if err := db.SeedUserDefaultCategories(ctx, collections.Categories, u.ID); err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to seed default categories")
 		return
 	}
 
@@ -259,6 +266,11 @@ func AuthenticateWithGoogle(collections *model.Collections, w http.ResponseWrite
 		}
 		u.ID = result.InsertedID.(primitive.ObjectID)
 		log.Printf("created new Google user: %s", email)
+
+		if err := db.SeedUserDefaultCategories(ctx, collections.Categories, u.ID); err != nil {
+			response.Error(w, http.StatusInternalServerError, "failed to seed default categories")
+			return
+		}
 	} else if err != nil {
 		log.Printf("database error: %v", err)
 		response.Error(w, http.StatusInternalServerError, "internal error")
