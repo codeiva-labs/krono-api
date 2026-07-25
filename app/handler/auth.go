@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -19,6 +20,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/api/idtoken"
 
+	"codeiva/krono-api/app/db"
 	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/pkg/mail"
 	"codeiva/krono-api/pkg/response"
@@ -28,6 +30,10 @@ type authRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Name     string `json:"name,omitempty"`
+	// DeviceID identifies the calling device. Required at login so the API
+	// can detect a login from an unrecognized device and rotate the active
+	// session, which signs out any previously logged-in device.
+	DeviceID string `json:"device_id,omitempty"`
 }
 
 type passwordResetRequest struct {
@@ -41,7 +47,8 @@ type passwordResetConfirm struct {
 }
 
 type googleAuthRequest struct {
-	IDToken string `json:"id_token"`
+	IDToken  string `json:"id_token"`
+	DeviceID string `json:"device_id"`
 }
 
 // Register creates a new user with hashed password
@@ -74,7 +81,7 @@ func Register(collections *model.Collections, w http.ResponseWriter, r *http.Req
 		UpdatedAt: time.Now().UTC(),
 	}
 
-	_, err = collections.Users.InsertOne(ctx, u)
+	result, err := collections.Users.InsertOne(ctx, u)
 	if err != nil {
 		// if duplicate key
 		if mongo.IsDuplicateKeyError(err) {
@@ -82,6 +89,12 @@ func Register(collections *model.Collections, w http.ResponseWriter, r *http.Req
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+	u.ID = result.InsertedID.(primitive.ObjectID)
+
+	if err := db.SeedUserDefaultCategories(ctx, collections.Categories, u.ID); err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to seed default categories")
 		return
 	}
 
@@ -97,6 +110,10 @@ func Login(collections *model.Collections, w http.ResponseWriter, r *http.Reques
 	}
 	if req.Email == "" || req.Password == "" {
 		response.Error(w, http.StatusBadRequest, "email and password required")
+		return
+	}
+	if req.DeviceID == "" {
+		response.Error(w, http.StatusBadRequest, "device_id required")
 		return
 	}
 
@@ -118,6 +135,12 @@ func Login(collections *model.Collections, w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	sessionID, isNewDevice, hasBackup, err := startSession(ctx, collections, &u, req.DeviceID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to start session")
+		return
+	}
+
 	// sign JWT
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
@@ -127,6 +150,7 @@ func Login(collections *model.Collections, w http.ResponseWriter, r *http.Reques
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":     u.Email,
 		"user_id": u.ID.Hex(),
+		"sid":     sessionID,
 		"iat":     time.Now().Unix(),
 		"exp":     time.Now().Add(24 * time.Hour).Unix(),
 	})
@@ -135,8 +159,6 @@ func Login(collections *model.Collections, w http.ResponseWriter, r *http.Reques
 		response.Error(w, http.StatusInternalServerError, "failed to create token")
 		return
 	}
-
-	// send email for login notification (optional)
 
 	// send email for login notification (optional)
 	go func(email string) {
@@ -156,7 +178,11 @@ func Login(collections *model.Collections, w http.ResponseWriter, r *http.Reques
 		log.Printf("sent login notification email to %s", email)
 	}(u.Email)
 
-	response.Success(w, map[string]string{"token": signed})
+	response.Success(w, map[string]any{
+		"token":      signed,
+		"new_device": isNewDevice,
+		"has_backup": hasBackup,
+	})
 }
 
 // Authenticate user with third party providers (e.g., Google, Facebook, Apple)
@@ -169,6 +195,10 @@ func AuthenticateWithGoogle(collections *model.Collections, w http.ResponseWrite
 	}
 	if req.IDToken == "" {
 		response.Error(w, http.StatusBadRequest, "id_token required")
+		return
+	}
+	if req.DeviceID == "" {
+		response.Error(w, http.StatusBadRequest, "device_id required")
 		return
 	}
 
@@ -236,6 +266,11 @@ func AuthenticateWithGoogle(collections *model.Collections, w http.ResponseWrite
 		}
 		u.ID = result.InsertedID.(primitive.ObjectID)
 		log.Printf("created new Google user: %s", email)
+
+		if err := db.SeedUserDefaultCategories(ctx, collections.Categories, u.ID); err != nil {
+			response.Error(w, http.StatusInternalServerError, "failed to seed default categories")
+			return
+		}
 	} else if err != nil {
 		log.Printf("database error: %v", err)
 		response.Error(w, http.StatusInternalServerError, "internal error")
@@ -277,6 +312,12 @@ func AuthenticateWithGoogle(collections *model.Collections, w http.ResponseWrite
 		}
 	}
 
+	sessionID, isNewDevice, hasBackup, err := startSession(ctx, collections, &u, req.DeviceID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to start session")
+		return
+	}
+
 	// Generate JWT token
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
@@ -286,6 +327,7 @@ func AuthenticateWithGoogle(collections *model.Collections, w http.ResponseWrite
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"sub":     u.Email,
 		"user_id": u.ID.Hex(),
+		"sid":     sessionID,
 		"iat":     time.Now().Unix(),
 		"exp":     time.Now().Add(24 * time.Hour).Unix(),
 	})
@@ -297,7 +339,11 @@ func AuthenticateWithGoogle(collections *model.Collections, w http.ResponseWrite
 		return
 	}
 
-	response.Success(w, map[string]string{"token": signed})
+	response.Success(w, map[string]any{
+		"token":      signed,
+		"new_device": isNewDevice,
+		"has_backup": hasBackup,
+	})
 }
 
 // RequestPasswordReset generates an OTP and emails it to the user.
@@ -411,4 +457,66 @@ func generateOTP6() (string, error) {
 		out.WriteString(fmt.Sprintf("%d", n.Int64()))
 	}
 	return out.String(), nil
+}
+
+// generateSessionID returns a random 48-hex-char token used as a JWT "sid" claim.
+func generateSessionID() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// startSession rotates the user's active session and records the device they're
+// logging in from. It reports whether this login comes from a device other than
+// the last one seen, and if so, whether the user has any existing (non-archived)
+// activities or categories that a "restore backup" would bring back.
+func startSession(ctx context.Context, collections *model.Collections, u *model.User, deviceID string) (sessionID string, isNewDevice bool, hasBackup bool, err error) {
+	sessionID, err = generateSessionID()
+	if err != nil {
+		return "", false, false, err
+	}
+
+	isNewDevice = u.LastDeviceID != "" && u.LastDeviceID != deviceID
+
+	if isNewDevice {
+		activityCount, cErr := collections.Activities.CountDocuments(ctx, bson.M{
+			"user_id":  u.ID,
+			"archived": bson.M{"$ne": true},
+		})
+		if cErr != nil {
+			return "", false, false, cErr
+		}
+		hasBackup = activityCount > 0
+		if !hasBackup {
+			categoryCount, cErr := collections.Categories.CountDocuments(ctx, bson.M{
+				"user_id":  u.ID,
+				"archived": bson.M{"$ne": true},
+			})
+			if cErr != nil {
+				return "", false, false, cErr
+			}
+			hasBackup = categoryCount > 0
+		}
+	}
+
+	now := time.Now().UTC()
+	_, err = collections.Users.UpdateOne(ctx,
+		bson.M{"_id": u.ID},
+		bson.M{"$set": bson.M{
+			"current_session_id": sessionID,
+			"last_device_id":     deviceID,
+			"updated_at":         now,
+		}},
+	)
+	if err != nil {
+		return "", false, false, err
+	}
+
+	u.CurrentSessionID = sessionID
+	u.LastDeviceID = deviceID
+	u.UpdatedAt = now
+
+	return sessionID, isNewDevice, hasBackup, nil
 }

@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 
-	"codeiva/krono-api/app/db"
 	"codeiva/krono-api/app/handler"
 	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/config"
+	"codeiva/krono-api/pkg/response"
 )
 
 // App has router and db instances
@@ -45,12 +47,6 @@ func (a *App) Initialize(cfg *config.Config) {
 	}
 	log.Println("Database indexes created successfully")
 
-	// Seed main categories
-	if err := db.SeedMainCategories(context.Background(), a.DB); err != nil {
-		log.Fatalf("Could not seed main categories: %v", err)
-	}
-	log.Println("Main categories seeded successfully")
-
 	a.Router = mux.NewRouter()
 	a.setRouters()
 }
@@ -68,22 +64,29 @@ func (a *App) setRouters() {
 	a.Router.HandleFunc("/auth/request-password-reset", a.handleRequest(handler.RequestPasswordReset)).Methods("POST")
 	a.Router.HandleFunc("/auth/reset-password", a.handleRequest(handler.ResetPassword)).Methods("POST")
 
+	// Profile routes (protected)
+	a.Router.Handle("/profile", a.Protected(handler.GetProfile)).Methods("GET")
+	a.Router.Handle("/profile", a.Protected(handler.UpdateProfile)).Methods("PUT")
+
+	// Account routes (protected)
+	a.Router.Handle("/account/data-decision", a.Protected(handler.SetDataDecision)).Methods("POST")
+
 	// Category routes (protected)
-	a.Router.Handle("/categories", handler.AuthMiddleware(a.handleRequest(handler.GetCategories))).Methods("GET")
-	a.Router.Handle("/categories/add", handler.AuthMiddleware(a.handleRequest(handler.CreateCategory))).Methods("POST")
-	a.Router.Handle("/categories/{category_id}/delete", handler.AuthMiddleware(a.handleRequest(handler.DeleteCategory))).Methods("DELETE")
-	a.Router.Handle("/categories/{category_id}/edit", handler.AuthMiddleware(a.handleRequest(handler.EditCategory))).Methods("PUT")
+	a.Router.Handle("/categories", a.Protected(handler.GetCategories)).Methods("GET")
+	a.Router.Handle("/categories/add", a.Protected(handler.CreateCategory)).Methods("POST")
+	a.Router.Handle("/categories/{category_id}/delete", a.Protected(handler.DeleteCategory)).Methods("DELETE")
+	a.Router.Handle("/categories/{category_id}/edit", a.Protected(handler.EditCategory)).Methods("PUT")
 
 	// Activity routes (protected)
-	a.Router.Handle("/activities", handler.AuthMiddleware(a.handleRequest(handler.GetActivities))).Methods("GET")
-	a.Router.Handle("/activities/{activity_id}", handler.AuthMiddleware(a.handleRequest(handler.GetActivityDetail))).Methods("GET")
-	a.Router.Handle("/activities/add", handler.AuthMiddleware(a.handleRequest(handler.AddActivity))).Methods("POST")
-	a.Router.Handle("/activities/{activity_id}/edit", handler.AuthMiddleware(a.handleRequest(handler.EditActivity))).Methods("PUT")
-	a.Router.Handle("/activities/{activity_id}/delete", handler.AuthMiddleware(a.handleRequest(handler.DeleteActivity))).Methods("DELETE")
+	a.Router.Handle("/activities", a.Protected(handler.GetActivities)).Methods("GET")
+	a.Router.Handle("/activities/{activity_id}", a.Protected(handler.GetActivityDetail)).Methods("GET")
+	a.Router.Handle("/activities/add", a.Protected(handler.AddActivity)).Methods("POST")
+	a.Router.Handle("/activities/{activity_id}/edit", a.Protected(handler.EditActivity)).Methods("PUT")
+	a.Router.Handle("/activities/{activity_id}/delete", a.Protected(handler.DeleteActivity)).Methods("DELETE")
 
 	// Statistics routes (protected)
-	a.Router.Handle("/stats/daily", handler.AuthMiddleware(a.handleRequest(handler.GetDailyStats))).Methods("GET")
-	a.Router.Handle("/stats/most-used-categories", handler.AuthMiddleware(a.handleRequest(handler.GetMostUsedCategories))).Methods("GET")
+	a.Router.Handle("/stats/daily", a.Protected(handler.GetDailyStats)).Methods("GET")
+	a.Router.Handle("/stats/most-used-categories", a.Protected(handler.GetMostUsedCategories)).Methods("GET")
 }
 
 // statusRecorder wraps http.ResponseWriter to capture the response status code.
@@ -139,4 +142,42 @@ func (a *App) handleRequest(handler RequestHandlerFunction) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		handler(a.Collections, w, r)
 	}
+}
+
+// requireActiveSession rejects requests whose token session id no longer
+// matches the user's current session id in the database. A login elsewhere
+// rotates that session id, which is how a login on a new device forces out
+// any previously logged-in device.
+func (a *App) requireActiveSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID, _ := r.Context().Value("user_id").(string)
+		sessionID, _ := r.Context().Value("session_id").(string)
+
+		userObjID, err := primitive.ObjectIDFromHex(userID)
+		if err != nil {
+			response.Error(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+
+		var u model.User
+		if err := a.Collections.Users.FindOne(ctx, bson.M{"_id": userObjID}).Decode(&u); err != nil {
+			response.Error(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		if sessionID == "" || u.CurrentSessionID == "" || sessionID != u.CurrentSessionID {
+			response.Error(w, http.StatusUnauthorized, "session ended: logged in on another device")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Protected wraps a handler with JWT auth and active-session validation.
+func (a *App) Protected(f RequestHandlerFunction) http.Handler {
+	return handler.AuthMiddleware(a.requireActiveSession(a.handleRequest(f)))
 }

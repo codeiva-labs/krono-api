@@ -58,8 +58,13 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Store user_id in context for handlers to use
+		// Extract session id (sid), set at login time, used by requireActiveSession
+		// to detect a token that's been superseded by a login on another device
+		sessionID, _ := claims["sid"].(string)
+
+		// Store user_id and session_id in context for handlers to use
 		ctx := context.WithValue(r.Context(), "user_id", userID)
+		ctx = context.WithValue(ctx, "session_id", sessionID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -105,6 +105,7 @@ func GetDailyStats(collections *model.Collections, w http.ResponseWriter, r *htt
 			}},
 			{Key: "end_time", Value: bson.D{{Key: "$ne", Value: nil}}}, // Only completed activities
 			{Key: "duration", Value: bson.D{{Key: "$gt", Value: 0}}},   // Only activities with duration
+			{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
 		}}},
 		// Stage 2: Project date without time (convert to user's timezone)
 		{{Key: "$project", Value: bson.D{
@@ -287,6 +288,7 @@ func GetMostUsedCategories(collections *model.Collections, w http.ResponseWriter
 			}},
 			{Key: "end_time", Value: bson.D{{Key: "$ne", Value: nil}}},
 			{Key: "duration", Value: bson.D{{Key: "$gt", Value: 0}}},
+			{Key: "archived", Value: bson.D{{Key: "$ne", Value: true}}},
 		}}},
 		// Stage 2: Group by category_id, sum durations and count activities
 		{{Key: "$group", Value: bson.D{
