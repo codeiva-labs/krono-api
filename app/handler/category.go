@@ -30,11 +30,15 @@ type categoryResponse struct {
 	IsMain    bool    `json:"is_main"`
 	ParentID  *string `json:"parent_id,omitempty"`
 	UserID    *string `json:"user_id,omitempty"`
+	Deleted   bool    `json:"deleted,omitempty"`
 	CreatedAt string  `json:"created_at"`
 	UpdatedAt string  `json:"updated_at"`
 }
 
-// GetCategories returns the authenticated user's own categories (main and sub)
+// GetCategories returns the authenticated user's own categories (main and sub).
+// Soft-deleted categories (Category.Deleted) are intentionally still included, flagged
+// via categoryResponse.Deleted, so clients can keep resolving names/colors/icons for
+// activities that reference them; only archived (bulk "start fresh" reset) is excluded.
 func GetCategories(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -130,7 +134,7 @@ func CreateCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 
 		// Parent must be a main category owned by the caller
 		var parent model.Category
-		err = collections.Categories.FindOne(ctx, bson.M{"_id": parentObjID, "is_main": true, "user_id": userObjID}).Decode(&parent)
+		err = collections.Categories.FindOne(ctx, bson.M{"_id": parentObjID, "is_main": true, "user_id": userObjID, "deleted": bson.M{"$ne": true}}).Decode(&parent)
 		if err != nil {
 			if err == mongo.ErrNoDocuments {
 				response.Error(w, http.StatusBadRequest, "parent_id must reference one of your own main categories")
@@ -154,7 +158,10 @@ func CreateCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 	response.Created(w, toCategoryResponse(category))
 }
 
-// DeleteCategory deletes a category owned by the user, as long as it has no subcategories (if main) and isn't used in any activity
+// DeleteCategory removes a category owned by the user, as long as it has no subcategories
+// (if main). If the category is referenced by any activity it's soft-deleted (flagged
+// "deleted" but kept) instead of removed, so those activities keep resolving its
+// name/color/icon; otherwise it's removed outright.
 func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *http.Request) {
 	userID := r.Context().Value("user_id")
 	if userID == nil {
@@ -186,7 +193,7 @@ func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 
 	// Verify category exists and is owned by the user
 	var category model.Category
-	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}}).Decode(&category)
+	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}, "deleted": bson.M{"$ne": true}}).Decode(&category)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			response.Error(w, http.StatusNotFound, "category not found or not owned by you")
@@ -217,11 +224,23 @@ func DeleteCategory(collections *model.Collections, w http.ResponseWriter, r *ht
 	}
 
 	if count > 0 {
-		response.Error(w, http.StatusConflict, "cannot delete category that is used in activities")
+		// In use - soft-delete instead of removing, so those activities keep
+		// resolving this category's name/color/icon. Hidden from creation/edit
+		// (the "deleted" exclusion above) but still returned by GetCategories.
+		now := time.Now().UTC()
+		_, err = collections.Categories.UpdateOne(ctx,
+			bson.M{"_id": categoryObjID},
+			bson.M{"$set": bson.M{"deleted": true, "deleted_at": now, "updated_at": now}},
+		)
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, "failed to delete category")
+			return
+		}
+		response.Success(w, map[string]string{"status": "deleted"})
 		return
 	}
 
-	// Delete the category
+	// Never used - safe to remove outright
 	_, err = collections.Categories.DeleteOne(ctx, bson.M{"_id": categoryObjID})
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to delete category")
@@ -269,7 +288,7 @@ func EditCategory(collections *model.Collections, w http.ResponseWriter, r *http
 
 	// Verify category exists and is owned by the user
 	var category model.Category
-	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}}).Decode(&category)
+	err = collections.Categories.FindOne(ctx, bson.M{"_id": categoryObjID, "user_id": userObjID, "archived": bson.M{"$ne": true}, "deleted": bson.M{"$ne": true}}).Decode(&category)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			response.Error(w, http.StatusNotFound, "category not found or not owned by you")
@@ -320,6 +339,7 @@ func toCategoryResponse(cat model.Category) categoryResponse {
 		Color:     cat.Color,
 		Icon:      cat.Icon,
 		IsMain:    cat.IsMain,
+		Deleted:   cat.Deleted,
 		CreatedAt: cat.CreatedAt.Format(time.RFC3339),
 		UpdatedAt: cat.UpdatedAt.Format(time.RFC3339),
 	}

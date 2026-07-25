@@ -19,6 +19,12 @@ type Category struct {
 	// fresh" on a new device.
 	Archived   bool       `bson:"archived,omitempty" json:"-"`
 	ArchivedAt *time.Time `bson:"archived_at,omitempty" json:"-"`
+	// Deleted is set when the owner deletes a category that still has
+	// activities referencing it: the category is hidden from creation/edit
+	// but - unlike Archived - still returned by GetCategories (flagged) so
+	// those activities can keep resolving its name/color/icon.
+	Deleted    bool       `bson:"deleted,omitempty" json:"deleted,omitempty"`
+	DeletedAt  *time.Time `bson:"deleted_at,omitempty" json:"-"`
 	CreatedAt  time.Time  `bson:"created_at" json:"created_at"`
 	UpdatedAt  time.Time  `bson:"updated_at" json:"updated_at"`
 }

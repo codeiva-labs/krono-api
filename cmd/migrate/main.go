@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -20,6 +21,13 @@ import (
 	"codeiva/krono-api/app/model"
 	"codeiva/krono-api/config"
 )
+
+// normalizeName collapses whitespace differences (e.g. "Social Media/ TV/ Radio"
+// vs "Social Media / TV / Radio") so old-name -> new-name matching isn't broken
+// by cosmetic spacing changes to the default category list over time.
+func normalizeName(name string) string {
+	return strings.Join(strings.Fields(name), "")
+}
 
 func main() {
 	if err := godotenv.Load(); err != nil {
@@ -100,18 +108,14 @@ func migrateUsersToOwnedCategories(ctx context.Context, collections *model.Colle
 			return err
 		}
 
-		alreadyOwned, err := collections.Categories.CountDocuments(ctx, bson.M{"user_id": u.ID, "is_main": true})
+		nameToNewID, seeded, err := ensureOwnedCategories(ctx, collections, u.ID)
 		if err != nil {
 			return err
 		}
-		if alreadyOwned > 0 {
+		if seeded {
+			usersMigrated++
+		} else {
 			usersSkipped++
-			continue
-		}
-
-		nameToNewID, err := seedOwnedCategories(ctx, collections, u.ID)
-		if err != nil {
-			return err
 		}
 
 		if len(legacyIDs) > 0 {
@@ -127,8 +131,6 @@ func migrateUsersToOwnedCategories(ctx context.Context, collections *model.Colle
 			}
 			activitiesRepointed += n
 		}
-
-		usersMigrated++
 	}
 	if err := userCursor.Err(); err != nil {
 		return err
@@ -139,7 +141,40 @@ func migrateUsersToOwnedCategories(ctx context.Context, collections *model.Colle
 	return nil
 }
 
-// seedOwnedCategories inserts the user's owned copy of the defaults and returns a name -> new id map.
+// ensureOwnedCategories returns a normalized-name -> owned-main-category-id map for the
+// user, seeding fresh defaults if they own none yet, or reading their existing owned mains
+// otherwise. The bool return reports whether a fresh seed happened (true) or the user
+// already owned categories (false) - repointing must run either way, since "already owns
+// some main categories" doesn't imply "already repointed" (e.g. a user seeded after the
+// category rework can still have older activities/subcategories referencing the pre-rework
+// shared categories).
+func ensureOwnedCategories(ctx context.Context, collections *model.Collections, userID primitive.ObjectID) (map[string]primitive.ObjectID, bool, error) {
+	cursor, err := collections.Categories.Find(ctx, bson.M{"user_id": userID, "is_main": true})
+	if err != nil {
+		return nil, false, err
+	}
+	var owned []model.Category
+	if err := cursor.All(ctx, &owned); err != nil {
+		return nil, false, err
+	}
+
+	if len(owned) > 0 {
+		nameToID := make(map[string]primitive.ObjectID, len(owned))
+		for _, c := range owned {
+			nameToID[normalizeName(c.Name)] = c.ID
+		}
+		return nameToID, false, nil
+	}
+
+	nameToID, err := seedOwnedCategories(ctx, collections, userID)
+	if err != nil {
+		return nil, false, err
+	}
+	return nameToID, true, nil
+}
+
+// seedOwnedCategories inserts the user's owned copy of the defaults and returns a
+// normalized-name -> new id map.
 func seedOwnedCategories(ctx context.Context, collections *model.Collections, userID primitive.ObjectID) (map[string]primitive.ObjectID, error) {
 	now := time.Now().UTC()
 	docs := make([]interface{}, len(db.MainCategories))
@@ -159,7 +194,7 @@ func seedOwnedCategories(ctx context.Context, collections *model.Collections, us
 
 	nameToNewID := make(map[string]primitive.ObjectID, len(db.MainCategories))
 	for i, id := range result.InsertedIDs {
-		nameToNewID[db.MainCategories[i].Name] = id.(primitive.ObjectID)
+		nameToNewID[normalizeName(db.MainCategories[i].Name)] = id.(primitive.ObjectID)
 	}
 	return nameToNewID, nil
 }
@@ -180,7 +215,7 @@ func repointCategoryParents(ctx context.Context, collections *model.Collections,
 
 	count := 0
 	for _, sub := range subs {
-		newID, ok := nameToNewID[legacyNameByID[*sub.ParentID]]
+		newID, ok := nameToNewID[normalizeName(legacyNameByID[*sub.ParentID])]
 		if !ok {
 			continue
 		}
@@ -211,7 +246,7 @@ func repointActivityCategories(ctx context.Context, collections *model.Collectio
 
 	count := 0
 	for _, act := range activities {
-		newID, ok := nameToNewID[legacyNameByID[act.CategoryID]]
+		newID, ok := nameToNewID[normalizeName(legacyNameByID[act.CategoryID])]
 		if !ok {
 			continue
 		}
