@@ -29,12 +29,15 @@ type DBConfig struct {
 func GetConfig() *Config {
 	uri := os.Getenv("MONGO_URI")
 	if uri == "" {
-		uri = "mongodb://localhost:27017"
+		// uri = "mongodb://localhost:27017"
+		// throw error if not set
+		panic("MONGO_URI environment variable not set")
 	}
 
 	db := os.Getenv("MONGO_DB")
 	if db == "" {
-		db = "krono"
+		// db = "krono"
+		panic("MONGO_DB environment variable not set")
 	}
 
 	timeout := 10
