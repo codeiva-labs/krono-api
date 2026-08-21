@@ -1,0 +1,50 @@
+services:
+  krono-api:
+    image: ghcr.io/codeiva-labs/krono-api:latest
+    container_name: krono-api
+    restart: unless-stopped
+
+    # Coolify environment variables
+    environment:
+      # Application
+      PORT: ${PORT:-3000}
+
+      # Database (required — the app refuses to start without these)
+      MONGO_URI: ${MONGO_URI}
+      MONGO_DB: ${MONGO_DB}
+      MONGO_CONNECT_TIMEOUT: ${MONGO_CONNECT_TIMEOUT:-10}
+
+      # Security (required in production — do not rely on the built-in dev default)
+      JWT_SECRET: ${JWT_SECRET}
+
+      # Google Sign-In
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+
+      # Email (optional — password-reset/login notifications are skipped if unset)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+
+    # Expose port only to the Docker network (Coolify handles the public reverse proxy)
+    expose:
+      - '${PORT:-3000}'
+
+    # The /health endpoint is served by the app; the image already ships curl.
+    # $${...} leaves port resolution to the container shell at runtime.
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:$${PORT:-3000}/health || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    networks:
+      - coolify
+
+    pull_policy: always
+
+networks:
+  coolify:
+    external: true
